@@ -672,23 +672,34 @@ func (r *Runner) extractVideo(c string) (string, error) {
 
 	maxHeight := r.Config.MVMax
 
-	for _, variant := range video.Variants {
-		matches := re.FindStringSubmatch(variant.URI)
-		if len(matches) == 3 {
-			height := matches[2]
-			var h int
-			_, err := fmt.Sscanf(height, "%d", &h)
-			if err != nil {
+	// Widevine L3 software CDM cannot acquire licenses for 4K / UHD streams marked
+	// HDCP-LEVEL=TYPE-1 (Apple license server rejects with error -42585). First attempt to
+	// select the highest-bandwidth stream that does not require HDCP-LEVEL=TYPE-1.
+	for _, skipType1 := range []bool{true, false} {
+		for _, variant := range video.Variants {
+			if skipType1 && variant.HDCPLevel == "TYPE-1" {
 				continue
 			}
-			if h <= maxHeight {
-				streamUrl, err = MediaUrl.Parse(variant.URI)
+			matches := re.FindStringSubmatch(variant.URI)
+			if len(matches) == 3 {
+				height := matches[2]
+				var h int
+				_, err := fmt.Sscanf(height, "%d", &h)
 				if err != nil {
-					return "", err
+					continue
 				}
-				fmt.Println("Video: " + variant.Resolution + "-" + variant.VideoRange)
-				break
+				if h <= maxHeight {
+					streamUrl, err = MediaUrl.Parse(variant.URI)
+					if err != nil {
+						return "", err
+					}
+					fmt.Println("Video: " + variant.Resolution + "-" + variant.VideoRange)
+					break
+				}
 			}
+		}
+		if streamUrl != nil {
+			break
 		}
 	}
 

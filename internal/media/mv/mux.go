@@ -7,6 +7,7 @@ import (
 	"io"
 	stdbits "math/bits"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 
@@ -48,6 +49,31 @@ type fragmentRef struct {
 // progressive MP4 suitable for go-mp4tag. Sample payloads are copied without
 // decoding or re-encoding.
 func Mux(videoPath, audioPath, outputPath string) error {
+	err := muxInternal(videoPath, audioPath, outputPath)
+	if err == nil {
+		return nil
+	}
+	// Fall back to ffmpeg if available
+	if ffmpegErr := muxWithFFmpeg(videoPath, audioPath, outputPath); ffmpegErr == nil {
+		return nil
+	}
+	return err
+}
+
+func muxWithFFmpeg(videoPath, audioPath, outputPath string) error {
+	ffmpegPath, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command(ffmpegPath, "-y", "-i", videoPath, "-i", audioPath, "-c", "copy", "-movflags", "+faststart", outputPath)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("ffmpeg mux failed: %w: %s", err, string(out))
+	}
+	return nil
+}
+
+func muxInternal(videoPath, audioPath, outputPath string) error {
 	video, err := openFragmentedStream(videoPath, "video")
 	if err != nil {
 		return fmt.Errorf("open video stream: %w", err)
@@ -114,39 +140,35 @@ func openFragmentedStream(path, wantType string) (*streamInput, error) {
 	}
 
 	moov := parsed.Init.Moov
-	if len(moov.Traks) != 1 {
-		_ = file.Close()
-		return nil, fmt.Errorf("expected exactly one track, got %d", len(moov.Traks))
-	}
 	if moov.Mvex == nil {
 		_ = file.Close()
 		return nil, errors.New("fragmented MP4 has no mvex box")
 	}
 
-	trak := moov.Traks[0]
-	if trak.Tkhd == nil || trak.Mdia == nil || trak.Mdia.Mdhd == nil || trak.Mdia.Hdlr == nil {
-		_ = file.Close()
-		return nil, errors.New("track is missing required header boxes")
+	var trak *mp4.TrakBox
+	for _, candidate := range moov.Traks {
+		if candidate.Tkhd == nil || candidate.Mdia == nil || candidate.Mdia.Mdhd == nil || candidate.Mdia.Hdlr == nil {
+			continue
+		}
+		if candidate.Mdia.Mdhd.Timescale == 0 {
+			continue
+		}
+		handlerType := candidate.Mdia.Hdlr.HandlerType
+		gotType := ""
+		switch handlerType {
+		case "vide":
+			gotType = "video"
+		case "soun":
+			gotType = "audio"
+		}
+		if gotType == wantType {
+			trak = candidate
+			break
+		}
 	}
-	if trak.Mdia.Mdhd.Timescale == 0 {
+	if trak == nil {
 		_ = file.Close()
-		return nil, errors.New("track timescale is zero")
-	}
-
-	handlerType := trak.Mdia.Hdlr.HandlerType
-	gotType := ""
-	switch handlerType {
-	case "vide":
-		gotType = "video"
-	case "soun":
-		gotType = "audio"
-	default:
-		_ = file.Close()
-		return nil, fmt.Errorf("unsupported track handler %q", handlerType)
-	}
-	if gotType != wantType {
-		_ = file.Close()
-		return nil, fmt.Errorf("expected %s track, got %s", wantType, gotType)
+		return nil, fmt.Errorf("expected %s track, but found none in %d tracks", wantType, len(moov.Traks))
 	}
 
 	var trex *mp4.TrexBox
@@ -168,6 +190,7 @@ func openFragmentedStream(path, wantType string) (*streamInput, error) {
 		trex:       trex,
 		oldTrackID: trak.Tkhd.TrackID,
 		timescale:  trak.Mdia.Mdhd.Timescale,
+		duration:   0,
 	}, nil
 }
 
@@ -185,16 +208,20 @@ func collectFragments(input *streamInput, kind int) ([]*fragmentRef, error) {
 			if fragment.Moof == nil || fragment.Mdat == nil {
 				return nil, errors.New("fragment is missing moof or mdat")
 			}
-			if len(fragment.Moof.Trafs) != 1 {
-				return nil, fmt.Errorf("expected one traf per fragment, got %d", len(fragment.Moof.Trafs))
+
+			var traf *mp4.TrafBox
+			for _, t := range fragment.Moof.Trafs {
+				if t.Tfhd != nil && t.Tfhd.TrackID == input.oldTrackID {
+					traf = t
+					break
+				}
+			}
+			if traf == nil {
+				continue
 			}
 
-			traf := fragment.Moof.Trafs[0]
-			if traf.Tfhd == nil || traf.Tfdt == nil {
-				return nil, errors.New("traf is missing tfhd or tfdt")
-			}
-			if traf.Tfhd.TrackID != input.oldTrackID {
-				return nil, fmt.Errorf("fragment track ID %d does not match init track ID %d", traf.Tfhd.TrackID, input.oldTrackID)
+			if traf.Tfdt == nil {
+				return nil, errors.New("traf is missing tfdt")
 			}
 			if len(traf.Truns) == 0 {
 				return nil, errors.New("traf has no trun boxes")
@@ -259,6 +286,34 @@ func mergeInit(video, audio *streamInput) error {
 	video.trex.TrackID = videoTrackID
 	audio.trak.Tkhd.TrackID = audioTrackID
 	audio.trex.TrackID = audioTrackID
+
+	// Clean moov children to retain only video trak and its trex
+	newChildren := make([]mp4.Box, 0, len(moov.Children)+2)
+	for _, child := range moov.Children {
+		if trak, isTrak := child.(*mp4.TrakBox); isTrak && trak != video.trak {
+			continue
+		}
+		newChildren = append(newChildren, child)
+	}
+	moov.Children = newChildren
+	moov.Traks = []*mp4.TrakBox{video.trak}
+
+	newTrexs := make([]*mp4.TrexBox, 0, 2)
+	for _, trex := range moov.Mvex.Trexs {
+		if trex == video.trex {
+			newTrexs = append(newTrexs, trex)
+		}
+	}
+	moov.Mvex.Trexs = newTrexs
+
+	newMvexChildren := make([]mp4.Box, 0, len(moov.Mvex.Children)+1)
+	for _, child := range moov.Mvex.Children {
+		if trex, isTrex := child.(*mp4.TrexBox); isTrex && trex != video.trex {
+			continue
+		}
+		newMvexChildren = append(newMvexChildren, child)
+	}
+	moov.Mvex.Children = newMvexChildren
 
 	moov.AddChild(audio.trak)
 	moov.Mvex.AddChild(audio.trex)

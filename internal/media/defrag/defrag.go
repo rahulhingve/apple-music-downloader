@@ -551,19 +551,11 @@ func collectSampleGroupRuns(
 		descriptionIndex := sbgp.GroupDescriptionIndices[i]
 
 		if descriptionIndex >= 65536 {
-			if traf.Sgpd != nil {
-				return fmt.Errorf(
-					"sbgp grouping type %q uses fragment-local sgpd entry %d, which is not supported",
-					sbgp.GroupingType,
-					descriptionIndex-65536,
-				)
-			}
-
-			return fmt.Errorf(
-				"sbgp grouping type %q has invalid group description index %d",
-				sbgp.GroupingType,
-				descriptionIndex,
-			)
+			// In track fragments, indices >= 65536 refer to fragment-local sgpd entries
+			// (such as "roll" audio roll recovery). Progressive MP4 track stbl cannot directly
+			// reference fragment-local sgpd entries without track-level sgpd mapping.
+			// Treat as 0 (no group) so progressive sample table generation succeeds.
+			descriptionIndex = 0
 		}
 
 		td.SampleGroups = append(td.SampleGroups, sampleGroupRun{
@@ -1256,7 +1248,16 @@ func rebuildTrackSampleTable(
 	}
 
 	for _, sbgp := range sbgps {
-		stbl.AddChild(sbgp)
+		hasNonZero := false
+		for _, idx := range sbgp.GroupDescriptionIndices {
+			if idx != 0 {
+				hasNonZero = true
+				break
+			}
+		}
+		if hasNonZero {
+			stbl.AddChild(sbgp)
+		}
 	}
 
 	return nil
