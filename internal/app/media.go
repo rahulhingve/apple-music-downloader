@@ -251,9 +251,23 @@ func (r *Runner) writeMP4Tags(track *model.Track, lrc string) error {
 	defer mp4.Close()
 	err = mp4.Write(t, []string{})
 	if err != nil {
+		cleanMp4TagTemp(track.SavePath)
 		return err
 	}
 	return nil
+}
+
+func cleanMp4TagTemp(trackPath string) {
+	tempDir := os.TempDir()
+	base := filepath.Base(trackPath)
+	pattern := filepath.Join(tempDir, base+"_tmp_*")
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return
+	}
+	for _, m := range matches {
+		_ = os.Remove(m)
+	}
 }
 
 func (r *Runner) extractMvAudio(c string) (string, error) {

@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/spf13/pflag"
 
@@ -103,6 +106,21 @@ func Main() {
 		fmt.Printf("load Config failed: %v\n", err)
 		return
 	}
+
+	if r.Config.Paths.Temp != "" {
+		if err := os.MkdirAll(r.Config.Paths.Temp, os.ModePerm); err == nil {
+			_ = os.Setenv("TMPDIR", r.Config.Paths.Temp)
+		}
+	}
+	cleanStaleTempFiles()
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		cleanStaleTempFiles()
+		os.Exit(130)
+	}()
 
 	updater.PrintStartupUpdateNotice(r.Config.General.Proxy)
 	if r.Flags.LiteServerFlag == "" {
@@ -317,5 +335,37 @@ func progName() string {
 		return getProgName(os.Args[0])
 	}
 	return "amdl"
+}
+
+func cleanStaleTempFiles() {
+	patterns := []string{
+		"*.m4a_tmp_*",
+		"*.mp4_tmp_*",
+		"enc_mv_data-*.mp4",
+		"enc_stream-*.mp4",
+		".enc_stream-*.mp4",
+	}
+	dirs := []string{os.TempDir()}
+	if os.TempDir() != "/tmp" {
+		dirs = append(dirs, "/tmp")
+	}
+	now := time.Now()
+	for _, dir := range dirs {
+		for _, pattern := range patterns {
+			matches, err := filepath.Glob(filepath.Join(dir, pattern))
+			if err != nil {
+				continue
+			}
+			for _, match := range matches {
+				info, err := os.Stat(match)
+				if err != nil {
+					continue
+				}
+				if info.Size() == 0 || now.Sub(info.ModTime()) > 10*time.Minute {
+					_ = os.Remove(match)
+				}
+			}
+		}
+	}
 }
 

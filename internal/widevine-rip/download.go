@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 
 	"github.com/schollz/progressbar/v3"
 
@@ -36,7 +37,14 @@ func DownloadAndDecryptStream(ctx context.Context, stream EncryptedStream, outpu
 		return errors.New("no download URLs")
 	}
 
-	tempFile, err := os.CreateTemp("", "enc_stream-*.mp4")
+	tempDir := filepath.Dir(outputPath)
+	if tempDir == "" {
+		tempDir = "."
+	}
+	if err := os.MkdirAll(tempDir, os.ModePerm); err != nil {
+		tempDir = ""
+	}
+	tempFile, err := os.CreateTemp(tempDir, ".enc_stream-*.mp4")
 	if err != nil {
 		return fmt.Errorf("create temp file: %w", err)
 	}

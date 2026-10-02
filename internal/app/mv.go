@@ -229,5 +229,9 @@ func (r *Runner) writeMVMP4Tags(path string, mvInfo *ampapi.MusicVideoResp, trac
 		return err
 	}
 	defer mp4.Close()
-	return mp4.Write(tags, []string{})
+	if err := mp4.Write(tags, []string{}); err != nil {
+		cleanMp4TagTemp(path)
+		return err
+	}
+	return nil
 }

@@ -46,6 +46,7 @@ type PathsConfig struct {
 	Atmos          string `koanf:"atmos"`
 	Aac            string `koanf:"aac"`
 	MV             string `koanf:"mv"`
+	Temp           string `koanf:"temp"`
 	AlbumFolder    string `koanf:"album-folder"`
 	PlaylistFolder string `koanf:"playlist-folder"`
 	ArtistFolder   string `koanf:"artist-folder"`

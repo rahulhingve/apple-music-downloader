@@ -162,3 +162,52 @@ func TestGetProgName(t *testing.T) {
 	}
 }
 
+func TestCleanMp4TagTemp(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("TMPDIR", tempDir)
+
+	dummyTrack := filepath.Join(tempDir, "01. Song Name.m4a")
+	dummyTemp := filepath.Join(tempDir, "01. Song Name.m4a_tmp_123456789")
+	if err := os.WriteFile(dummyTemp, []byte("temp-data"), 0644); err != nil {
+		t.Fatalf("failed to create dummy temp file: %v", err)
+	}
+
+	cleanMp4TagTemp(dummyTrack)
+
+	if _, err := os.Stat(dummyTemp); !os.IsNotExist(err) {
+		t.Errorf("expected %s to be removed, but it still exists", dummyTemp)
+	}
+}
+
+func TestCleanStaleTempFiles(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("TMPDIR", tempDir)
+
+	zeroByteFile := filepath.Join(tempDir, "01. Test.m4a_tmp_999999999")
+	if err := os.WriteFile(zeroByteFile, []byte{}, 0644); err != nil {
+		t.Fatalf("failed to create 0-byte file: %v", err)
+	}
+
+	mvFile := filepath.Join(tempDir, "enc_mv_data-12345.mp4")
+	if err := os.WriteFile(mvFile, []byte{}, 0644); err != nil {
+		t.Fatalf("failed to create dummy MV file: %v", err)
+	}
+
+	streamFile := filepath.Join(tempDir, "enc_stream-12345.mp4")
+	if err := os.WriteFile(streamFile, []byte{}, 0644); err != nil {
+		t.Fatalf("failed to create dummy stream file: %v", err)
+	}
+
+	cleanStaleTempFiles()
+
+	if _, err := os.Stat(zeroByteFile); !os.IsNotExist(err) {
+		t.Errorf("expected %s to be cleaned up, but it still exists", zeroByteFile)
+	}
+	if _, err := os.Stat(mvFile); !os.IsNotExist(err) {
+		t.Errorf("expected %s to be cleaned up, but it still exists", mvFile)
+	}
+	if _, err := os.Stat(streamFile); !os.IsNotExist(err) {
+		t.Errorf("expected %s to be cleaned up, but it still exists", streamFile)
+	}
+}
+

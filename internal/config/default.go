@@ -30,6 +30,7 @@ func Default() Config {
 			Atmos:          "AM-Atmos",
 			Aac:            "AM-AAC",
 			MV:             "AM-MV",
+			Temp:           "",
 			AlbumFolder:    "{AlbumName}",
 			PlaylistFolder: "{PlaylistName}",
 			ArtistFolder:   "{UrlArtistName}",

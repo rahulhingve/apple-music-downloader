@@ -500,6 +500,7 @@ func (r *Runner) ripStation(albumId string, token string, storefront string, med
 		err = mp4.Write(tags, []string{})
 		_ = mp4.Close()
 		if err != nil {
+			cleanMp4TagTemp(trackPath)
 			_ = os.Remove(trackPath)
 			fmt.Println("Failed to embed station tags.", err)
 			r.State.Counter.Error++
